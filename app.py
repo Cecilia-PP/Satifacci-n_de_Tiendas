@@ -182,6 +182,54 @@ try:
             dia_sel = st.sidebar.multiselect("Día del Mes:", dias, default=dias)
             df = df[df["Día"].isin(dia_sel) | df["Día"].isna()]
 
+    # Cálculo previo de métricas de tiendas para Semáforo
+    if "Tienda que Grabo_Limpia" in df.columns and "Estado Rectificación" in df.columns:
+        df_rect_all = df[df["Estado Rectificación"] != "N - Nulo"].copy()
+
+        base_t = df.groupby("Tienda que Grabo_Limpia", as_index=False).agg(lineas_despachadas=("Tienda que Grabo_Limpia", "size"))
+        piv_t = df_rect_all.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"]).size().unstack(fill_value=0)
+
+        tab_t = base_t.merge(piv_t, on="Tienda que Grabo_Limpia", how="left").fillna(0)
+        for est_col in ["Confirmada", "Pendientes", "Anuladas", "Automática"]:
+            if est_col not in tab_t.columns:
+                tab_t[est_col] = 0
+
+        tab_t["lineas_rectificadas"] = tab_t["Confirmada"] + tab_t["Pendientes"] + tab_t["Anuladas"] + tab_t["Automática"]
+        tab_t["pct_rectificadas_num"] = (tab_t["lineas_rectificadas"] / tab_t["lineas_despachadas"]) * 100
+
+        # Asignación de solo el círculo de color para la tabla
+        def calificar_icono(pct):
+            if pct > 15:
+                return "🔴"
+            elif pct >= 5:
+                return "🟡"
+            else:
+                return "🟢"
+
+        def calificar_texto(pct):
+            if pct > 15:
+                return "🔴 Alta Insatisfacción (>15%)"
+            elif pct >= 5:
+                return "🟡 Media Insatisfacción (5-15%)"
+            else:
+                return "🟢 Baja Insatisfacción (<5%)"
+
+        tab_t["Semaforo_Icono"] = tab_t["pct_rectificadas_num"].apply(calificar_icono)
+        tab_t["Semaforo_Texto"] = tab_t["pct_rectificadas_num"].apply(calificar_texto)
+
+        total_tiendas_count = len(tab_t)
+        cant_rojas = (tab_t["pct_rectificadas_num"] > 15).sum()
+        cant_amarillas = ((tab_t["pct_rectificadas_num"] >= 5) & (tab_t["pct_rectificadas_num"] <= 15)).sum()
+        cant_verdes = (tab_t["pct_rectificadas_num"] < 5).sum()
+
+        pct_rojas = (cant_rojas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
+        pct_amarillas = (cant_amarillas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
+        pct_verdes = (cant_verdes / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
+    else:
+        tab_t = pd.DataFrame()
+        total_tiendas_count, cant_rojas, cant_amarillas, cant_verdes = 0, 0, 0, 0
+        pct_rojas, pct_amarillas, pct_verdes = 0, 0, 0
+
     # Pestañas principales
     tab_resumen, tab_graficos, tab_tiendas = st.tabs([
         "📊 Resumen General", 
@@ -190,35 +238,78 @@ try:
     ])
 
     with tab_resumen:
-        st.subheader("📌 Métricas Generales")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Líneas Despachadas", f"{len(df):,}")
+        st.subheader("📌 Métricas Generales e Índice de Insatisfacción")
         
+        tot_despachadas = len(df)
         tot_uds = int(df["Total Unidades_Num"].sum(skipna=True))
-        m2.metric("Total Unidades", f"{tot_uds:,}")
         
-        costo_confirmadas = df[df["Estado Rectificación"] == "Confirmada"]["Costo_Linea"].sum(skipna=True)
-        m3.metric("Costo Total Est.", f"")
+        # Recálculo de costo total sobre TODAS las líneas rectificadas (Confirmadas, Pendientes, Anuladas y Automáticas)
+        costo_rectificadas = df[df["Estado Rectificación"] != "N - Nulo"]["Costo_Linea"].sum(skipna=True)
+        
+        tot_confirmadas = (df["Estado Rectificación"] == "Confirmada").sum()
+        tot_pendientes = (df["Estado Rectificación"] == "Pendientes").sum()
+        tot_anuladas = (df["Estado Rectificación"] == "Anuladas").sum()
+        tot_automaticas = (df["Estado Rectificación"] == "Automática").sum()
+        tot_rectificadas = tot_confirmadas + tot_pendientes + tot_anuladas + tot_automaticas
+        
+        pct_insatisfaccion = (tot_rectificadas / tot_despachadas * 100) if tot_despachadas > 0 else 0
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Líneas Despachadas", f"{tot_despachadas:,}")
+        m2.metric("Total Unidades/Bultos", f"{tot_uds:,}")
+        m3.metric("Índice Insatisfacción Global", f"{pct_insatisfaccion:.2f}%")
+        m4.metric("Costo Total Rectificaciones", f"")
 
         st.markdown("---")
 
-        st.subheader("📊 Desglose por Estado de Rectificación")
+        # SECCIÓN DEL SEMÁFORO VISUAL
+        st.subheader("🚦 Distribución de Tiendas por Nivel de Insatisfacción (Semáforo)")
+        
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Total Tiendas Analizadas", f"{total_tiendas_count}")
+        s2.metric("🔴 Alta Insatisfacción (>15%)", f"{cant_rojas} ({pct_rojas:.1f}%)")
+        s3.metric("🟡 Media Insatisfacción (5-15%)", f"{cant_amarillas} ({pct_amarillas:.1f}%)")
+        s4.metric("🟢 Baja Insatisfacción (<5%)", f"{cant_verdes} ({pct_verdes:.1f}%)")
+
+        if not tab_t.empty:
+            col_chart, col_empty = st.columns([1, 1])
+            with col_chart:
+                df_sem = tab_t["Semaforo_Texto"].value_counts().reset_index()
+                df_sem.columns = ["Nivel", "Cantidad"]
+                
+                colors_map = {
+                    "🔴 Alta Insatisfacción (>15%)": "#CC0000",
+                    "🟡 Media Insatisfacción (5-15%)": "#F1C232",
+                    "🟢 Baja Insatisfacción (<5%)": "#38761D"
+                }
+
+                fig_donut = px.pie(
+                    df_sem, 
+                    names="Nivel", 
+                    values="Cantidad", 
+                    hole=0.4,
+                    color="Nivel",
+                    color_discrete_map=colors_map,
+                    title="Proporción de Tiendas por Semáforo"
+                )
+                fig_donut.update_traces(textinfo="percent+value")
+                fig_donut.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=20, r=20, t=40, b=20)
+                )
+                st.plotly_chart(fig_donut, width="stretch", key="grafico_semaforo_donut")
+
+        st.markdown("---")
+
+        st.subheader("📊 Desglose de Líneas por Estado de Rectificación")
         e1, e2, e3, e4, e5 = st.columns(5)
         if "Estado Rectificación" in df.columns:
-            confirmadas = len(df[df["Estado Rectificación"] == "Confirmada"])
-            e1.metric("Confirmadas (M)", f"{confirmadas:,}")
-
-            rechazadas = len(df[df["Estado Rectificación"] == "Anuladas"])
-            e2.metric("Anuladas (R)", f"{rechazadas:,}")
-
-            pendientes = len(df[df["Estado Rectificación"] == "Pendientes"])
-            e3.metric("Pendientes (P)", f"{pendientes:,}")
-
-            automaticas = len(df[df["Estado Rectificación"] == "Automática"])
-            e4.metric("Automáticas (A)", f"{automaticas:,}")
-
-            nulas = len(df[df["Estado Rectificación"] == "N - Nulo"])
-            e5.metric("Nulas / Vacías (N)", f"{nulas:,}")
+            e1.metric("Confirmadas (M)", f"{tot_confirmadas:,}")
+            e2.metric("Anuladas (R)", f"{tot_anuladas:,}")
+            e3.metric("Pendientes (P)", f"{tot_pendientes:,}")
+            e4.metric("Automáticas (A)", f"{tot_automaticas:,}")
+            e5.metric("Nulas / Vacías (N)", f"{(df['Estado Rectificación'] == 'N - Nulo').sum():,}")
 
     with tab_graficos:
         st.subheader("📈 Análisis de Tendencias Temporales")
@@ -383,60 +474,49 @@ try:
                         st.markdown(f"**Resolución líneas rectificadas**")
                         st.info("No hay rectificaciones registradas para el nivel de filtro seleccionado.")
 
-    # HOJA 3: DETALLE POR TIENDA (ORDENADA POR % DE LÍNEAS RECTIFICADAS DE MAYOR A MENOR)
+    # HOJA 3: DETALLE POR TIENDA CON LEYENDA Y SOLO CÍRCULO EN LA TABLA
     with tab_tiendas:
-        st.subheader("🏪 Detalle de Rectificaciones por Tienda")
+        st.subheader("🏪 Detalle de Rectificaciones por Tienda (Ranking de Insatisfacción)")
         
-        if "Tienda que Grabo_Limpia" in df.columns and "Estado Rectificación" in df.columns:
-            df_rect = df[df["Estado Rectificación"] != "N - Nulo"].copy()
+        # Leyenda explicativa arriba de la tabla
+        st.info("💡 **Leyenda del Semáforo de Insatisfacción:** &nbsp;&nbsp; 🔴 **Alta** (>15%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟡 **Media** (5% - 15%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 **Baja** (<5%)")
+        
+        if not tab_t.empty:
+            # Ordenar de mayor a menor por %
+            tab_t_sorted = tab_t.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
 
-            base_tiendas = df.groupby("Tienda que Grabo_Limpia", as_index=False).agg(
-                lineas_despachadas=("Tienda que Grabo_Limpia", "size")
-            )
+            # Renombrar columnas
+            tab_t_sorted = tab_t_sorted.rename(columns={
+                "Tienda que Grabo_Limpia": "Tienda",
+                "Semaforo_Icono": "Nivel Insatisfacción",
+                "lineas_rectificadas": "Líneas rectificadas",
+                "pct_rectificadas_num": "% líneas rectificadas",
+                "Confirmada": "Confirmadas (M)",
+                "Pendientes": "Pendientes (P)",
+                "Anuladas": "Anuladas (R)",
+                "Automática": "Automáticas (A)"
+            })
 
-            pivot_estados = df_rect.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"]).size().unstack(fill_value=0)
+            cols_select = [
+                "Tienda", "Nivel Insatisfacción", "Líneas rectificadas", 
+                "Confirmadas (M)", "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", "% líneas rectificadas"
+            ]
 
-            tabla_tiendas = base_tiendas.merge(pivot_estados, on="Tienda que Grabo_Limpia", how="left").fillna(0)
+            df_tiendas_disp = tab_t_sorted[cols_select].copy()
 
-            for est_col in ["Confirmada", "Pendientes", "Anuladas", "Automática"]:
-                if est_col not in tabla_tiendas.columns:
-                    tabla_tiendas[est_col] = 0
-
-            tabla_tiendas["lineas_rectificadas"] = (
-                tabla_tiendas["Confirmada"] + tabla_tiendas["Pendientes"] + 
-                tabla_tiendas["Anuladas"] + tabla_tiendas["Automática"]
-            )
-
-            # Cálculo numérico exacto para el ordenamiento
-            tabla_tiendas["pct_rectificadas_num"] = (tabla_tiendas["lineas_rectificadas"] / tabla_tiendas["lineas_despachadas"]) * 100
-            
-            # ORDENAMIENTO ESTRICTO DE MAYOR A MENOR POR EL PORCENTAJE
-            tabla_tiendas = tabla_tiendas.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
-
-            # Totales globales
-            tot_despachadas = len(df)
+            # Totales calculados
             tot_confirmadas = (df["Estado Rectificación"] == "Confirmada").sum()
             tot_pendientes = (df["Estado Rectificación"] == "Pendientes").sum()
             tot_anuladas = (df["Estado Rectificación"] == "Anuladas").sum()
             tot_automaticas = (df["Estado Rectificación"] == "Automática").sum()
             tot_rectificadas = tot_confirmadas + tot_pendientes + tot_anuladas + tot_automaticas
-
+            tot_despachadas = len(df)
             tot_pct = (tot_rectificadas / tot_despachadas * 100) if tot_despachadas > 0 else 0
 
-            cols_select = [
-                "Tienda que Grabo_Limpia", "lineas_rectificadas", 
-                "Confirmada", "Pendientes", "Anuladas", "Automática", "pct_rectificadas_num"
-            ]
-
-            df_tiendas_disp = tabla_tiendas[cols_select].copy()
-            df_tiendas_disp.columns = [
-                "Tienda", "Líneas rectificadas", "Confirmadas (M)", 
-                "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", "% líneas rectificadas"
-            ]
-
-            # Fila Total al final
+            # Fila de Totales
             fila_total = pd.DataFrame([{
                 "Tienda": "Total",
+                "Nivel Insatisfacción": "—",
                 "Líneas rectificadas": int(tot_rectificadas),
                 "Confirmadas (M)": int(tot_confirmadas),
                 "Pendientes (P)": int(tot_pendientes),
@@ -447,7 +527,6 @@ try:
 
             df_final_tiendas = pd.concat([df_tiendas_disp, fila_total], ignore_index=True)
 
-            # Configuración de formato numérico de porcentaje para Streamlit
             st.dataframe(
                 df_final_tiendas, 
                 width="stretch", 
