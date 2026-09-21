@@ -383,12 +383,11 @@ try:
                         st.markdown(f"**Resolución líneas rectificadas**")
                         st.info("No hay rectificaciones registradas para el nivel de filtro seleccionado.")
 
-    # HOJA 3: DETALLE POR TIENDA (CORREGIDA PARA COINCIDIR CON EL RESUMEN GENERAL)
+    # HOJA 3: DETALLE POR TIENDA (ORDENADA POR % DE LÍNEAS RECTIFICADAS DE MAYOR A MENOR)
     with tab_tiendas:
         st.subheader("🏪 Detalle de Rectificaciones por Tienda")
         
         if "Tienda que Grabo_Limpia" in df.columns and "Estado Rectificación" in df.columns:
-            # Conteo de registros por estado y tienda
             df_rect = df[df["Estado Rectificación"] != "N - Nulo"].copy()
 
             base_tiendas = df.groupby("Tienda que Grabo_Limpia", as_index=False).agg(
@@ -408,10 +407,13 @@ try:
                 tabla_tiendas["Anuladas"] + tabla_tiendas["Automática"]
             )
 
+            # Cálculo numérico exacto para el ordenamiento
             tabla_tiendas["pct_rectificadas_num"] = (tabla_tiendas["lineas_rectificadas"] / tabla_tiendas["lineas_despachadas"]) * 100
-            tabla_tiendas = tabla_tiendas.sort_values(by="lineas_rectificadas", ascending=False).reset_index(drop=True)
+            
+            # ORDENAMIENTO ESTRICTO DE MAYOR A MENOR POR EL PORCENTAJE
+            tabla_tiendas = tabla_tiendas.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
 
-            # Totales globales que coinciden con la primera hoja
+            # Totales globales
             tot_despachadas = len(df)
             tot_confirmadas = (df["Estado Rectificación"] == "Confirmada").sum()
             tot_pendientes = (df["Estado Rectificación"] == "Pendientes").sum()
@@ -432,6 +434,7 @@ try:
                 "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", "% líneas rectificadas"
             ]
 
+            # Fila Total al final
             fila_total = pd.DataFrame([{
                 "Tienda": "Total",
                 "Líneas rectificadas": int(tot_rectificadas),
@@ -443,9 +446,25 @@ try:
             }])
 
             df_final_tiendas = pd.concat([df_tiendas_disp, fila_total], ignore_index=True)
-            df_final_tiendas["% líneas rectificadas"] = df_final_tiendas["% líneas rectificadas"].apply(lambda x: f"{x:.2f} %".replace(".", ","))
 
-            st.dataframe(df_final_tiendas, width="stretch", hide_index=True, key="tabla_resumen_tiendas")
+            # Configuración de formato numérico de porcentaje para Streamlit
+            st.dataframe(
+                df_final_tiendas, 
+                width="stretch", 
+                hide_index=True, 
+                key="tabla_resumen_tiendas",
+                column_config={
+                    "% líneas rectificadas": st.column_config.NumberColumn(
+                        "% líneas rectificadas",
+                        format="%.2f %%"
+                    ),
+                    "Líneas rectificadas": st.column_config.NumberColumn("Líneas rectificadas", format="%d"),
+                    "Confirmadas (M)": st.column_config.NumberColumn("Confirmadas (M)", format="%d"),
+                    "Pendientes (P)": st.column_config.NumberColumn("Pendientes (P)", format="%d"),
+                    "Anuladas (R)": st.column_config.NumberColumn("Anuladas (R)", format="%d"),
+                    "Automáticas (A)": st.column_config.NumberColumn("Automáticas (A)", format="%d")
+                }
+            )
 
 except FileNotFoundError as e:
     st.error(f"⚠️ {e}")
