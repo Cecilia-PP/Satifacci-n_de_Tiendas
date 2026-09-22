@@ -8,15 +8,21 @@ import os
 # Configuración de pantalla ancha y título
 st.set_page_config(page_title="Tablero Satisfacción de Tienda", layout="wide")
 
-# Bloqueo de traducción automática del navegador e Inyección de CSS para ajustar encabezados de tabla
+# Bloqueo de traducción automática del navegador
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+
+# Inyección CSS específica para obligar a Streamlit a saltar línea en los encabezados de las tablas
 st.markdown("""
 <style>
-    /* Forzar salto de línea y ajuste de texto en encabezados de st.dataframe */
-    div[data-testid="stDataFrame"] th {
+    /* Forzar el wrap de texto en encabezados de st.dataframe */
+    div[data-testid="stTable"] th, div[data-testid="stDataFrame"] th {
         white-space: pre-wrap !important;
+        word-wrap: break-word !important;
         text-align: center !important;
         vertical-align: middle !important;
+    }
+    div[data-testid="stDataFrame"] [data-testid="stHeader"] {
+        white-space: pre-wrap !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -484,7 +490,7 @@ try:
                         st.markdown(f"**Resolución unidades rectificadas**")
                         st.info("No hay rectificaciones registradas para el nivel de filtro seleccionado.")
 
-    # HOJA 3: DETALLE POR TIENDA (ENCABEZADOS RELLENADOS Y ANCHO HOMOGÉNEO)
+    # HOJA 3: DETALLE POR TIENDA (CONFIGURACIÓN NATIVA LIMPIA Y SIMÉTRICA DE STREAMLIT)
     with tab_tiendas:
         st.subheader("🏪 Detalle de Rectificaciones por Tienda (Unidades)")
         
@@ -493,28 +499,6 @@ try:
         if not tab_t.empty:
             tab_t_sorted = tab_t.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
 
-            tab_t_sorted = tab_t_sorted.rename(columns={
-                "Tienda que Grabo_Limpia": "Tienda",
-                "Semaforo_Icono": "Nivel Insatisfacción",
-                "unidades_despachadas": "Unidades Despachadas",
-                "unidades_reclamadas_totales": "Unidades Reclamadas Totales",
-                "unidades_efectivas": "Unidades Rectificadas Efectivas (M+A)",
-                "pct_rectificadas_num": "% Rectificado Efectivo",
-                "Confirmada": "Confirmadas (M)",
-                "Pendientes": "Pendientes (P)",
-                "Anuladas": "Anuladas (R)",
-                "Automática": "Automáticas (A)"
-            })
-
-            cols_select = [
-                "Tienda", "Nivel Insatisfacción", "Unidades Despachadas", 
-                "Unidades Reclamadas Totales", "Unidades Rectificadas Efectivas (M+A)", 
-                "Confirmadas (M)", "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", 
-                "% Rectificado Efectivo"
-            ]
-
-            df_tiendas_disp = tab_t_sorted[cols_select].copy()
-
             tot_unidades_despachadas = int(df["Total Unidades_Num"].sum(skipna=True))
             tot_unidades_confirmadas = int(df[df["Estado Rectificación"] == "Confirmada"]["Total Unidades_Num"].sum(skipna=True))
             tot_unidades_pendientes = int(df[df["Estado Rectificación"] == "Pendientes"]["Total Unidades_Num"].sum(skipna=True))
@@ -522,44 +506,67 @@ try:
             tot_unidades_automaticas = int(df[df["Estado Rectificación"] == "Automática"]["Total Unidades_Num"].sum(skipna=True))
             tot_unidades_reclamadas_totales = tot_unidades_confirmadas + tot_unidades_pendientes + tot_unidades_anuladas + tot_unidades_automaticas
             tot_unidades_efectivas = tot_unidades_confirmadas + tot_unidades_automaticas
-            
             tot_pct_rectificados = (tot_unidades_efectivas / tot_unidades_despachadas * 100) if tot_unidades_despachadas > 0 else 0
+
+            # RENOMBRADO COMPACTO DE COLUMNAS CON CÓDIGOS CORTOS PARA MANTENER ANCHOS HOMOGÉNEOS
+            tab_t_sorted = tab_t_sorted.rename(columns={
+                "Tienda que Grabo_Limpia": "Tienda",
+                "Semaforo_Icono": "Nivel Insatisf.",
+                "unidades_despachadas": "Unid. Despachadas",
+                "unidades_reclamadas_totales": "Unid. Reclamadas Totales",
+                "unidades_efectivas": "Unid. Rectif. Efectivas",
+                "pct_rectificadas_num": "% Rectif. Efectivo",
+                "Confirmada": "Confirmadas (M)",
+                "Pendientes": "Pendientes (P)",
+                "Anuladas": "Anuladas (R)",
+                "Automática": "Automáticas (A)"
+            })
+
+            cols_select = [
+                "Tienda", "Nivel Insatisf.", "Unid. Despachadas", 
+                "Unid. Reclamadas Totales", "Unid. Rectif. Efectivas", 
+                "Confirmadas (M)", "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", 
+                "% Rectif. Efectivo"
+            ]
+
+            df_tiendas_disp = tab_t_sorted[cols_select].copy()
 
             fila_total = pd.DataFrame([{
                 "Tienda": "Total",
-                "Nivel Insatisfacción": "—",
-                "Unidades Despachadas": int(tot_unidades_despachadas),
-                "Unidades Reclamadas Totales": int(tot_unidades_reclamadas_totales),
-                "Unidades Rectificadas Efectivas (M+A)": int(tot_unidades_efectivas),
+                "Nivel Insatisf.": "—",
+                "Unid. Despachadas": int(tot_unidades_despachadas),
+                "Unid. Reclamadas Totales": int(tot_unidades_reclamadas_totales),
+                "Unid. Rectif. Efectivas": int(tot_unidades_efectivas),
                 "Confirmadas (M)": int(tot_unidades_confirmadas),
                 "Pendientes (P)": int(tot_unidades_pendientes),
                 "Anuladas (R)": int(tot_unidades_anuladas),
                 "Automáticas (A)": int(tot_unidades_automaticas),
-                "% Rectificado Efectivo": tot_pct_rectificados
+                "% Rectif. Efectivo": tot_pct_rectificados
             }])
 
             df_final_tiendas = pd.concat([df_tiendas_disp, fila_total], ignore_index=True)
 
+            # RENDERIZADO NATIVO STREAMLIT CON FORMATO NUMÉRICO Y LEYENDA CLARA
             st.dataframe(
                 df_final_tiendas, 
                 width="stretch", 
                 hide_index=True, 
                 key="tabla_resumen_tiendas",
                 column_config={
-                    "Tienda": st.column_config.Column("Tienda", width=70),
-                    "Nivel Insatisfacción": st.column_config.Column("Nivel\nInsatisfacción", width=100),
-                    "Unidades Despachadas": st.column_config.NumberColumn("Unidades\nDespachadas", format="%d", width=110),
-                    "Unidades Reclamadas Totales": st.column_config.NumberColumn("Unidades Reclamadas\nTotales", format="%d", width=130),
-                    "Unidades Rectificadas Efectivas (M+A)": st.column_config.NumberColumn("Unidades Rectificadas\nEfectivas (M+A)", format="%d", width=140),
-                    "Confirmadas (M)": st.column_config.NumberColumn("Confirmadas\n(M)", format="%d", width=100),
-                    "Pendientes (P)": st.column_config.NumberColumn("Pendientes\n(P)", format="%d", width=100),
-                    "Anuladas (R)": st.column_config.NumberColumn("Anuladas\n(R)", format="%d", width=100),
-                    "Automáticas (A)": st.column_config.NumberColumn("Automáticas\n(A)", format="%d", width=100),
-                    "% Rectificado Efectivo": st.column_config.NumberColumn("% Rectificado\nEfectivo", format="%.2f %%", width=110)
+                    "Tienda": st.column_config.Column("Tienda"),
+                    "Nivel Insatisf.": st.column_config.Column("Nivel Insatisf."),
+                    "Unid. Despachadas": st.column_config.NumberColumn("Unid. Despachadas", format="%d"),
+                    "Unid. Reclamadas Totales": st.column_config.NumberColumn("Unid. Reclamadas Totales", format="%d"),
+                    "Unid. Rectif. Efectivas": st.column_config.NumberColumn("Unid. Rectif. Efectivas (M+A)", format="%d"),
+                    "Confirmadas (M)": st.column_config.NumberColumn("Confirmadas (M)", format="%d"),
+                    "Pendientes (P)": st.column_config.NumberColumn("Pendientes (P)", format="%d"),
+                    "Anuladas (R)": st.column_config.NumberColumn("Anuladas (R)", format="%d"),
+                    "Automáticas (A)": st.column_config.NumberColumn("Automáticas (A)", format="%d"),
+                    "% Rectif. Efectivo": st.column_config.NumberColumn("% Rectif. Efectivo", format="%.2f %%")
                 }
             )
 
-    # HOJA 4: ANÁLISIS DE NOTAS / OPERACIONES (ORDEN DE MAYOR A MENOR DE ARRIBA A ABAJO)
+    # HOJA 4: ANÁLISIS DE NOTAS / OPERACIONES
     with tab_notas:
         st.subheader("📋 Análisis de Carga Administrativa por Cantidad de Notas / Operaciones")
         st.caption("Esta sección analiza la frecuencia de reclamos creados por las tiendas (Cuenta de Operaciones/Notas), permitiendo medir el impacto operativo independientemente del volumen de unidades.")
@@ -583,7 +590,6 @@ try:
 
         st.markdown("**Top 10 Tiendas con Mayor Cantidad de Notas (Desglose por Estado de Rectificación)**")
         
-        # Top 10 ordenado de mayor a menor
         top_tiendas_counts = df_rect_notas["Tienda que Grabo_Limpia"].value_counts().head(10)
         top_tiendas_list = top_tiendas_counts.index.tolist()
         
@@ -669,12 +675,12 @@ try:
             hide_index=True,
             key="tabla_detalle_notas_tienda",
             column_config={
-                "Tienda": st.column_config.Column("Tienda", width=80),
-                "Total Notas": st.column_config.NumberColumn("Total\nNotas", format="%d", width=100),
-                "Notas Confirmadas (M)": st.column_config.NumberColumn("Notas Confirmadas\n(M)", format="%d", width=120),
-                "Notas Pendientes (P)": st.column_config.NumberColumn("Notas Pendientes\n(P)", format="%d", width=120),
-                "Notas Anuladas (R)": st.column_config.NumberColumn("Notas Anuladas\n(R)", format="%d", width=120),
-                "Notas Automáticas (A)": st.column_config.NumberColumn("Notas Automáticas\n(A)", format="%d", width=120)
+                "Tienda": st.column_config.Column("Tienda"),
+                "Total Notas": st.column_config.NumberColumn("Total Notas", format="%d"),
+                "Notas Confirmadas (M)": st.column_config.NumberColumn("Notas Confirmadas (M)", format="%d"),
+                "Notas Pendientes (P)": st.column_config.NumberColumn("Notas Pendientes (P)", format="%d"),
+                "Notas Anuladas (R)": st.column_config.NumberColumn("Notas Anuladas (R)", format="%d"),
+                "Notas Automáticas (A)": st.column_config.NumberColumn("Notas Automáticas (A)", format="%d")
             }
         )
 
