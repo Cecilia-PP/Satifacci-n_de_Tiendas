@@ -205,39 +205,40 @@ try:
         tab_t["pct_rectificadas_num"] = (tab_t["unidades_efectivas"] / tab_t["unidades_despachadas"]) * 100
         tab_t["pct_rectificadas_num"] = tab_t["pct_rectificadas_num"].fillna(0)
 
-        p33 = float(tab_t["pct_rectificadas_num"].quantile(0.33))
-        p66 = float(tab_t["pct_rectificadas_num"].quantile(0.66))
+        # CÁLCULO DE PERCENTILES P70 Y P90
+        p70 = float(tab_t["pct_rectificadas_num"].quantile(0.70))
+        p90 = float(tab_t["pct_rectificadas_num"].quantile(0.90))
 
         def calificar_icono(pct):
-            if pct > p66 and p66 > 0:
+            if pct > p90 and p90 > 0:
                 return "🔴"
-            elif pct >= p33 and p33 > 0:
+            elif pct >= p70 and p70 > 0:
                 return "🟡"
             else:
                 return "🟢"
 
         def calificar_texto(pct):
-            if pct > p66 and p66 > 0:
-                return f"🔴 Alta Insatisfacción (>{p66:.2f}%)"
-            elif pct >= p33 and p33 > 0:
-                return f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)"
+            if pct > p90 and p90 > 0:
+                return f"🔴 Alta Insatisfacción (>{p90:.2f}%)"
+            elif pct >= p70 and p70 > 0:
+                return f"🟡 Media Insatisfacción ({p70:.2f}% - {p90:.2f}%)"
             else:
-                return f"🟢 Baja Insatisfacción (<{p33:.2f}%)"
+                return f"🟢 Baja Insatisfacción (<{p70:.2f}%)"
 
         tab_t["Semaforo_Icono"] = tab_t["pct_rectificadas_num"].apply(calificar_icono)
         tab_t["Semaforo_Texto"] = tab_t["pct_rectificadas_num"].apply(calificar_texto)
 
         total_tiendas_count = len(tab_t)
-        cant_rojas = (tab_t["pct_rectificadas_num"] > p66).sum() if p66 > 0 else 0
-        cant_amarillas = ((tab_t["pct_rectificadas_num"] >= p33) & (tab_t["pct_rectificadas_num"] <= p66)).sum() if p33 > 0 else 0
-        cant_verdes = (tab_t["pct_rectificadas_num"] < p33).sum() if p33 > 0 else total_tiendas_count
+        cant_rojas = (tab_t["pct_rectificadas_num"] > p90).sum() if p90 > 0 else 0
+        cant_amarillas = ((tab_t["pct_rectificadas_num"] >= p70) & (tab_t["pct_rectificadas_num"] <= p90)).sum() if p70 > 0 else 0
+        cant_verdes = (tab_t["pct_rectificadas_num"] < p70).sum() if p70 > 0 else total_tiendas_count
 
         pct_rojas = (cant_rojas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
         pct_amarillas = (cant_amarillas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
         pct_verdes = (cant_verdes / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
     else:
         tab_t = pd.DataFrame()
-        p33, p66 = 0.0, 0.0
+        p70, p90 = 0.0, 0.0
         total_tiendas_count, cant_rojas, cant_amarillas, cant_verdes = 0, 0, 0, 0
         pct_rojas, pct_amarillas, pct_verdes = 0, 0, 0
 
@@ -280,9 +281,21 @@ try:
         
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Total Tiendas Analizadas", f"{total_tiendas_count}")
-        s2.metric(f"🔴 Alta Insatisfacción (>{p66:.2f}%)", f"{cant_rojas} ({pct_rojas:.1f}%)")
-        s3.metric(f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)", f"{cant_amarillas} ({pct_amarillas:.1f}%)")
-        s4.metric(f"🟢 Baja Insatisfacción (<{p33:.2f}%)", f"{cant_verdes} ({pct_verdes:.1f}%)")
+        s2.metric(
+            f"🔴 Alta Insatisfacción (>{p90:.2f}%)", 
+            f"{cant_rojas} ({pct_rojas:.1f}%)",
+            help="Clasificación basada en el percentil 90 (P90) del período. Aísla al 10% de las tiendas con desvíos más críticos de la cadena."
+        )
+        s3.metric(
+            f"🟡 Media Insatisfacción ({p70:.2f}% - {p90:.2f}%)", 
+            f"{cant_amarillas} ({pct_amarillas:.1f}%)",
+            help="Clasificación ubicada entre los percentiles P70 y P90 del período. Representa al 20% de las tiendas en zona intermedia de seguimiento."
+        )
+        s4.metric(
+            f"🟢 Baja Insatisfacción (<{p70:.2f}%)", 
+            f"{cant_verdes} ({pct_verdes:.1f}%)",
+            help="Clasificación hasta el percentil 70 (P70) del período. Agrupa al 70% de las tiendas con mejor desempeño y desvíos dentro de tolerancias operativas."
+        )
 
         if not tab_t.empty:
             col_chart, col_empty = st.columns([1, 1])
@@ -291,9 +304,9 @@ try:
                 df_sem.columns = ["Nivel", "Cantidad"]
                 
                 colors_map = {
-                    f"🔴 Alta Insatisfacción (>{p66:.2f}%)": "#CC0000",
-                    f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)": "#F1C232",
-                    f"🟢 Baja Insatisfacción (<{p33:.2f}%)": "#38761D"
+                    f"🔴 Alta Insatisfacción (>{p90:.2f}%)": "#CC0000",
+                    f"🟡 Media Insatisfacción ({p70:.2f}% - {p90:.2f}%)": "#F1C232",
+                    f"🟢 Baja Insatisfacción (<{p70:.2f}%)": "#38761D"
                 }
 
                 fig_donut = px.pie(
@@ -490,11 +503,11 @@ try:
                         st.markdown(f"**Resolución unidades rectificadas**")
                         st.info("No hay rectificaciones registradas para el nivel de filtro seleccionado.")
 
-    # HOJA 3: DETALLE POR TIENDA (CONFIGURACIÓN NATIVA LIMPIA Y SIMÉTRICA DE STREAMLIT)
+    # HOJA 3: DETALLE POR TIENDA
     with tab_tiendas:
         st.subheader("🏪 Detalle de Rectificaciones por Tienda (Unidades)")
         
-        st.info(f"💡 **Leyenda del Semáforo de Insatisfacción:** Se calcula con el **% Unidades Rectificadas Efectivas** (Confirmadas M + Automáticas A / Despachadas). Umbrales: 🔴 **Alta** (>{p66:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟡 **Media** ({p33:.2f}% - {p66:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 **Baja** (<{p33:.2f}%)")
+        st.info(f"💡 **Leyenda del Semáforo de Insatisfacción:** Se calcula con el **% Unidades Rectificadas Efectivas** (Confirmadas M + Automáticas A / Despachadas). Umbrales: 🔴 **Alta** (>{p90:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟡 **Media** ({p70:.2f}% - {p90:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 **Baja** (<{p70:.2f}%)")
         
         if not tab_t.empty:
             tab_t_sorted = tab_t.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
@@ -508,7 +521,6 @@ try:
             tot_unidades_efectivas = tot_unidades_confirmadas + tot_unidades_automaticas
             tot_pct_rectificados = (tot_unidades_efectivas / tot_unidades_despachadas * 100) if tot_unidades_despachadas > 0 else 0
 
-            # RENOMBRADO COMPACTO DE COLUMNAS CON CÓDIGOS CORTOS PARA MANTENER ANCHOS HOMOGÉNEOS
             tab_t_sorted = tab_t_sorted.rename(columns={
                 "Tienda que Grabo_Limpia": "Tienda",
                 "Semaforo_Icono": "Nivel Insatisf.",
@@ -546,7 +558,6 @@ try:
 
             df_final_tiendas = pd.concat([df_tiendas_disp, fila_total], ignore_index=True)
 
-            # RENDERIZADO NATIVO STREAMLIT CON FORMATO NUMÉRICO Y LEYENDA CLARA
             st.dataframe(
                 df_final_tiendas, 
                 width="stretch", 
