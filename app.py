@@ -8,8 +8,18 @@ import os
 # Configuración de pantalla ancha y título
 st.set_page_config(page_title="Tablero Satisfacción de Tienda", layout="wide")
 
-# Bloqueo de traducción automática del navegador
+# Bloqueo de traducción automática del navegador e Inyección de CSS para ajustar encabezados de tabla
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+st.markdown("""
+<style>
+    /* Forzar salto de línea y ajuste de texto en encabezados de st.dataframe */
+    div[data-testid="stDataFrame"] th {
+        white-space: pre-wrap !important;
+        text-align: center !important;
+        vertical-align: middle !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📦 Tablero Satisfacción de Tienda")
 
@@ -36,7 +46,7 @@ def cargar_datos():
             break
 
     col_nudvre = None
-    for c in ["NUDVRE", "Num Dev", "Nota", "Num Nota", "NUM_DEV", "BDNDV", "Num_Nota_Devolucion"]:
+    for c in ["NUDVRE", "Num Dev", "Nota", "Num Nota", "NUM_DEV", "BDNDV", "Num_Nota_Devolucion", "Num_Movimiento", "Num_Mov"]:
         if c in df.columns:
             col_nudvre = c
             break
@@ -57,7 +67,7 @@ def cargar_datos():
     col_estado = "Estado" if "Estado" in df.columns else ("ESTCDR" if "ESTCDR" in df.columns else None)
     if col_estado:
         estado_limpio = df[col_estado].fillna("N").astype(str).str.strip().str.upper()
-        estado_limpio = estado_limpio.replace({"NAN": "N", "": "N", "NONE": "N"})
+        estado_limpio = estado_limpio.replace({"NAN": "N", "": "N", "NONE": "N", "(EN BLANCO)": "N"})
         
         mapa_estados = {
             "M": "Confirmada",
@@ -70,31 +80,11 @@ def cargar_datos():
     else:
         df["Estado Rectificación"] = "N - Nulo"
 
-    # 4. Creación de Aux Art-Nota-tienda
-    df["Aux Art-Nota-tienda"] = None
+    # 4. Identificador de Operación / Nota
     if col_nudvre:
-        nudvre_s = df[col_nudvre].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-        es_valido = (~nudvre_s.isin(["", "nan", "None", "0", "NAN"]))
-        
-        if col_artik:
-            artik_s = df[col_artik].fillna("SIN_ART").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-            df.loc[es_valido, "Aux Art-Nota-tienda"] = (
-                artik_s[es_valido] + "-" + 
-                nudvre_s[es_valido] + "-" + 
-                df.loc[es_valido, "Tienda que Grabo_Limpia"]
-            )
-        else:
-            df.loc[es_valido, "Aux Art-Nota-tienda"] = (
-                nudvre_s[es_valido] + "-" + 
-                df.loc[es_valido, "Tienda que Grabo_Limpia"]
-            )
-
-    if df["Aux Art-Nota-tienda"].dropna().empty:
-        es_rectificado = df["Estado Rectificación"] != "N - Nulo"
-        df.loc[es_rectificado, "Aux Art-Nota-tienda"] = (
-            df.loc[es_rectificado, "Estado Rectificación"] + "-" + 
-            df.loc[es_rectificado, "Tienda que Grabo_Limpia"]
-        )
+        df["Nota_Operacion"] = df[col_nudvre].fillna("Sin Nota").astype(str).str.replace(r"\.0$", "", regex=True)
+    else:
+        df["Nota_Operacion"] = "Sin Nota"
 
     # 5. Campos de Fecha
     col_fecha = "Fecha del Movimiento" if "Fecha del Movimiento" in df.columns else [c for c in df.columns if "FEC" in c.upper()][0]
@@ -110,25 +100,32 @@ def cargar_datos():
     if col_area:
         df["AREA_Limpia"] = df[col_area].fillna("Sin Área").astype(str).str.replace(r"\.0$", "", regex=True)
 
-    # 7. Conversión Numérica
-    col_unidades = "Total Unidades" if "Total Unidades" in df.columns else ("Total_Unidades" if "Total_Unidades" in df.columns else None)
-    col_costo = "Precio medio de coste" if "Precio medio de coste" in df.columns else ("Precio_medio_de_coste" if "Precio_medio_de_coste" in df.columns else None)
+    # 7. Conversión Numérica Limpia de Unidades y Costo Monetario Directo
+    col_unidades = None
+    for u in ["Total Unidades", "Total_Unidades", "UNIDADES", "QTY", "CANTIDAD"]:
+        if u in df.columns:
+            col_unidades = u
+            break
+
+    col_costo = None
+    for c in ["Precio medio de coste", "Precio_medio_de_coste", "PRECIO", "COSTO", "COSTE", "PRECIO_MEDIO"]:
+        if c in df.columns:
+            col_costo = c
+            break
 
     if col_unidades:
         df["Total Unidades_Num"] = pd.to_numeric(
-            df[col_unidades].astype(str).str.replace(",", "."), errors="coerce"
+            df[col_unidades].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce"
         ).fillna(0)
     else:
         df["Total Unidades_Num"] = 0
 
     if col_costo:
-        df["Costo_Num"] = pd.to_numeric(
-            df[col_costo].astype(str).str.replace(",", "."), errors="coerce"
+        df["Costo_Linea"] = pd.to_numeric(
+            df[col_costo].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce"
         ).fillna(0)
     else:
-        df["Costo_Num"] = 0
-
-    df["Costo_Linea"] = df["Total Unidades_Num"] * df["Costo_Num"]
+        df["Costo_Linea"] = 0
             
     return df
 
@@ -182,94 +179,104 @@ try:
             dia_sel = st.sidebar.multiselect("Día del Mes:", dias, default=dias)
             df = df[df["Día"].isin(dia_sel) | df["Día"].isna()]
 
-    # Cálculo previo de métricas de tiendas para Semáforo
+    # CÁLCULO DE UNIDADES Y PORCENTAJES POR TIENDA
     if "Tienda que Grabo_Limpia" in df.columns and "Estado Rectificación" in df.columns:
         df_rect_all = df[df["Estado Rectificación"] != "N - Nulo"].copy()
 
-        base_t = df.groupby("Tienda que Grabo_Limpia", as_index=False).agg(lineas_despachadas=("Tienda que Grabo_Limpia", "size"))
-        piv_t = df_rect_all.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"]).size().unstack(fill_value=0)
+        base_t = df.groupby("Tienda que Grabo_Limpia", as_index=False).agg(
+            unidades_despachadas=("Total Unidades_Num", "sum")
+        )
+        piv_t = df_rect_all.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"])["Total Unidades_Num"].sum().unstack(fill_value=0)
 
         tab_t = base_t.merge(piv_t, on="Tienda que Grabo_Limpia", how="left").fillna(0)
         for est_col in ["Confirmada", "Pendientes", "Anuladas", "Automática"]:
             if est_col not in tab_t.columns:
                 tab_t[est_col] = 0
 
-        tab_t["lineas_rectificadas"] = tab_t["Confirmada"] + tab_t["Pendientes"] + tab_t["Anuladas"] + tab_t["Automática"]
-        tab_t["pct_rectificadas_num"] = (tab_t["lineas_rectificadas"] / tab_t["lineas_despachadas"]) * 100
+        tab_t["unidades_reclamadas_totales"] = tab_t["Confirmada"] + tab_t["Pendientes"] + tab_t["Anuladas"] + tab_t["Automática"]
+        tab_t["unidades_efectivas"] = tab_t["Confirmada"] + tab_t["Automática"]
+        
+        tab_t["pct_rectificadas_num"] = (tab_t["unidades_efectivas"] / tab_t["unidades_despachadas"]) * 100
+        tab_t["pct_rectificadas_num"] = tab_t["pct_rectificadas_num"].fillna(0)
 
-        # Asignación de solo el círculo de color para la tabla
+        p33 = float(tab_t["pct_rectificadas_num"].quantile(0.33))
+        p66 = float(tab_t["pct_rectificadas_num"].quantile(0.66))
+
         def calificar_icono(pct):
-            if pct > 15:
+            if pct > p66 and p66 > 0:
                 return "🔴"
-            elif pct >= 5:
+            elif pct >= p33 and p33 > 0:
                 return "🟡"
             else:
                 return "🟢"
 
         def calificar_texto(pct):
-            if pct > 15:
-                return "🔴 Alta Insatisfacción (>15%)"
-            elif pct >= 5:
-                return "🟡 Media Insatisfacción (5-15%)"
+            if pct > p66 and p66 > 0:
+                return f"🔴 Alta Insatisfacción (>{p66:.2f}%)"
+            elif pct >= p33 and p33 > 0:
+                return f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)"
             else:
-                return "🟢 Baja Insatisfacción (<5%)"
+                return f"🟢 Baja Insatisfacción (<{p33:.2f}%)"
 
         tab_t["Semaforo_Icono"] = tab_t["pct_rectificadas_num"].apply(calificar_icono)
         tab_t["Semaforo_Texto"] = tab_t["pct_rectificadas_num"].apply(calificar_texto)
 
         total_tiendas_count = len(tab_t)
-        cant_rojas = (tab_t["pct_rectificadas_num"] > 15).sum()
-        cant_amarillas = ((tab_t["pct_rectificadas_num"] >= 5) & (tab_t["pct_rectificadas_num"] <= 15)).sum()
-        cant_verdes = (tab_t["pct_rectificadas_num"] < 5).sum()
+        cant_rojas = (tab_t["pct_rectificadas_num"] > p66).sum() if p66 > 0 else 0
+        cant_amarillas = ((tab_t["pct_rectificadas_num"] >= p33) & (tab_t["pct_rectificadas_num"] <= p66)).sum() if p33 > 0 else 0
+        cant_verdes = (tab_t["pct_rectificadas_num"] < p33).sum() if p33 > 0 else total_tiendas_count
 
         pct_rojas = (cant_rojas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
         pct_amarillas = (cant_amarillas / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
         pct_verdes = (cant_verdes / total_tiendas_count * 100) if total_tiendas_count > 0 else 0
     else:
         tab_t = pd.DataFrame()
+        p33, p66 = 0.0, 0.0
         total_tiendas_count, cant_rojas, cant_amarillas, cant_verdes = 0, 0, 0, 0
         pct_rojas, pct_amarillas, pct_verdes = 0, 0, 0
 
     # Pestañas principales
-    tab_resumen, tab_graficos, tab_tiendas = st.tabs([
+    tab_resumen, tab_graficos, tab_tiendas, tab_notas = st.tabs([
         "📊 Resumen General", 
         "📈 Visualización Temporal", 
-        "🏪 Detalle por Tienda"
+        "🏪 Detalle por Tienda (Unidades)",
+        "📋 Análisis por Cantidad de Notas"
     ])
 
     with tab_resumen:
-        st.subheader("📌 Métricas Generales e Índice de Insatisfacción")
+        st.subheader("📌 Métricas Generales: Unidades Despachadas vs. Rectificadas")
         
-        tot_despachadas = len(df)
-        tot_uds = int(df["Total Unidades_Num"].sum(skipna=True))
+        unidades_despachadas = int(df["Total Unidades_Num"].sum(skipna=True))
         
-        # Recálculo de costo total sobre TODAS las líneas rectificadas (Confirmadas, Pendientes, Anuladas y Automáticas)
-        costo_rectificadas = df[df["Estado Rectificación"] != "N - Nulo"]["Costo_Linea"].sum(skipna=True)
+        unidades_confirmadas = int(df[df["Estado Rectificación"] == "Confirmada"]["Total Unidades_Num"].sum(skipna=True))
+        unidades_pendientes = int(df[df["Estado Rectificación"] == "Pendientes"]["Total Unidades_Num"].sum(skipna=True))
+        unidades_anuladas = int(df[df["Estado Rectificación"] == "Anuladas"]["Total Unidades_Num"].sum(skipna=True))
+        unidades_automaticas = int(df[df["Estado Rectificación"] == "Automática"]["Total Unidades_Num"].sum(skipna=True))
         
-        tot_confirmadas = (df["Estado Rectificación"] == "Confirmada").sum()
-        tot_pendientes = (df["Estado Rectificación"] == "Pendientes").sum()
-        tot_anuladas = (df["Estado Rectificación"] == "Anuladas").sum()
-        tot_automaticas = (df["Estado Rectificación"] == "Automática").sum()
-        tot_rectificadas = tot_confirmadas + tot_pendientes + tot_anuladas + tot_automaticas
+        unidades_rectificadas_efectivas = unidades_confirmadas + unidades_automaticas
+        unidades_reclamadas_totales = unidades_rectificadas_efectivas + unidades_pendientes + unidades_anuladas
         
-        pct_insatisfaccion = (tot_rectificadas / tot_despachadas * 100) if tot_despachadas > 0 else 0
+        costo_rectificadas_efectivas = float(df[df["Estado Rectificación"].isin(["Confirmada", "Automática"])]["Costo_Linea"].sum(skipna=True))
+
+        pct_rectificadas_global = (unidades_rectificadas_efectivas / unidades_despachadas * 100) if unidades_despachadas > 0 else 0
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Líneas Despachadas", f"{tot_despachadas:,}")
-        m2.metric("Total Unidades/Bultos", f"{tot_uds:,}")
-        m3.metric("Índice Insatisfacción Global", f"{pct_insatisfaccion:.2f}%")
-        m4.metric("Costo Total Rectificaciones", f"")
+        m1.metric("Unidades Despachadas", f"{unidades_despachadas:,}")
+        m2.metric("Unidades Rectificadas Efectivas (M + A)", f"{unidades_rectificadas_efectivas:,}")
+        m3.metric("% Unidades Rectificadas Efectivas", f"{pct_rectificadas_global:.2f}%", help="Fórmula: (Confirmadas M + Automáticas A) / Unidades Despachadas")
+        m4.metric("Costo Rectificaciones Efectivas", f"")
+
+        st.caption(f"ℹ️ **Aclaración de Unidades:** Se registraron **{unidades_reclamadas_totales:,}** unidades reclamadas en total (incluyendo {unidades_anuladas:,} anuladas y {unidades_pendientes:,} pendientes). El porcentaje del **{pct_rectificadas_global:.2f}%** se calcula sobre las **{unidades_rectificadas_efectivas:,}** unidades efectivamente rectificadas (Confirmadas + Automáticas).")
 
         st.markdown("---")
 
-        # SECCIÓN DEL SEMÁFORO VISUAL
-        st.subheader("🚦 Distribución de Tiendas por Nivel de Insatisfacción (Semáforo)")
+        st.subheader("🚦 Distribución de Tiendas por Nivel de Insatisfacción (Semáforo Estadístico)")
         
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Total Tiendas Analizadas", f"{total_tiendas_count}")
-        s2.metric("🔴 Alta Insatisfacción (>15%)", f"{cant_rojas} ({pct_rojas:.1f}%)")
-        s3.metric("🟡 Media Insatisfacción (5-15%)", f"{cant_amarillas} ({pct_amarillas:.1f}%)")
-        s4.metric("🟢 Baja Insatisfacción (<5%)", f"{cant_verdes} ({pct_verdes:.1f}%)")
+        s2.metric(f"🔴 Alta Insatisfacción (>{p66:.2f}%)", f"{cant_rojas} ({pct_rojas:.1f}%)")
+        s3.metric(f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)", f"{cant_amarillas} ({pct_amarillas:.1f}%)")
+        s4.metric(f"🟢 Baja Insatisfacción (<{p33:.2f}%)", f"{cant_verdes} ({pct_verdes:.1f}%)")
 
         if not tab_t.empty:
             col_chart, col_empty = st.columns([1, 1])
@@ -278,9 +285,9 @@ try:
                 df_sem.columns = ["Nivel", "Cantidad"]
                 
                 colors_map = {
-                    "🔴 Alta Insatisfacción (>15%)": "#CC0000",
-                    "🟡 Media Insatisfacción (5-15%)": "#F1C232",
-                    "🟢 Baja Insatisfacción (<5%)": "#38761D"
+                    f"🔴 Alta Insatisfacción (>{p66:.2f}%)": "#CC0000",
+                    f"🟡 Media Insatisfacción ({p33:.2f}% - {p66:.2f}%)": "#F1C232",
+                    f"🟢 Baja Insatisfacción (<{p33:.2f}%)": "#38761D"
                 }
 
                 fig_donut = px.pie(
@@ -290,7 +297,7 @@ try:
                     hole=0.4,
                     color="Nivel",
                     color_discrete_map=colors_map,
-                    title="Proporción de Tiendas por Semáforo"
+                    title="Proporción de Tiendas por Semáforo Estadístico"
                 )
                 fig_donut.update_traces(textinfo="percent+value")
                 fig_donut.update_layout(
@@ -302,17 +309,18 @@ try:
 
         st.markdown("---")
 
-        st.subheader("📊 Desglose de Líneas por Estado de Rectificación")
+        st.subheader("📊 Desglose de Unidades por Estado de Rectificación")
         e1, e2, e3, e4, e5 = st.columns(5)
         if "Estado Rectificación" in df.columns:
-            e1.metric("Confirmadas (M)", f"{tot_confirmadas:,}")
-            e2.metric("Anuladas (R)", f"{tot_anuladas:,}")
-            e3.metric("Pendientes (P)", f"{tot_pendientes:,}")
-            e4.metric("Automáticas (A)", f"{tot_automaticas:,}")
-            e5.metric("Nulas / Vacías (N)", f"{(df['Estado Rectificación'] == 'N - Nulo').sum():,}")
+            unidades_nulas = int(df[df["Estado Rectificación"] == "N - Nulo"]["Total Unidades_Num"].sum(skipna=True))
+            e1.metric("Confirmadas (M)", f"{unidades_confirmadas:,}")
+            e2.metric("Anuladas (R)", f"{unidades_anuladas:,}")
+            e3.metric("Pendientes (P)", f"{unidades_pendientes:,}")
+            e4.metric("Automáticas (A)", f"{unidades_automaticas:,}")
+            e5.metric("Nulas / Vacías (N)", f"{unidades_nulas:,}")
 
     with tab_graficos:
-        st.subheader("📈 Análisis de Tendencias Temporales")
+        st.subheader("📈 Análisis de Tendencias Temporales por Unidades")
         
         opciones_eje_x = {
             "Año": "Año",
@@ -337,47 +345,48 @@ try:
             
             if nivel_seleccionado == "Fecha":
                 grouped = df_graf.groupby(["Fecha_DT", col_eje_x], as_index=False).agg(
-                    lineas_despachadas=(col_eje_x, "size"),
-                    notas_art=("Estado Rectificación", lambda x: (x != "N - Nulo").sum())
+                    unidades_despachadas=("Total Unidades_Num", "sum"),
+                    unidades_rectificadas=("Total Unidades_Num", lambda x: x[df_graf.loc[x.index, "Estado Rectificación"].isin(["Confirmada", "Automática"])].sum())
                 )
                 grouped = grouped.sort_values(by="Fecha_DT").reset_index(drop=True)
             else:
                 grouped = df_graf.groupby(col_eje_x, as_index=False).agg(
-                    lineas_despachadas=(col_eje_x, "size"),
-                    notas_art=("Estado Rectificación", lambda x: (x != "N - Nulo").sum())
+                    unidades_despachadas=("Total Unidades_Num", "sum"),
+                    unidades_rectificadas=("Total Unidades_Num", lambda x: x[df_graf.loc[x.index, "Estado Rectificación"].isin(["Confirmada", "Automática"])].sum())
                 )
                 grouped = grouped.sort_values(by=col_eje_x).reset_index(drop=True)
 
-            grouped["pct_rectificadas"] = (grouped["notas_art"] / grouped["lineas_despachadas"]) * 100
+            grouped["pct_rectificadas"] = (grouped["unidades_rectificadas"] / grouped["unidades_despachadas"]) * 100
+            grouped["pct_rectificadas"] = grouped["pct_rectificadas"].fillna(0)
             eje_x_labels = grouped[col_eje_x].astype(str)
 
             with c1:
-                st.markdown(f"**Líneas despachadas vs rectificadas**")
+                st.markdown(f"**Unidades despachadas vs % unidades rectificadas efectivas (M+A)**")
                 fig1 = go.Figure()
 
                 fig1.add_trace(go.Bar(
                     x=eje_x_labels,
-                    y=grouped["lineas_despachadas"],
-                    name="Líneas despachadas",
+                    y=grouped["unidades_despachadas"],
+                    name="Unidades despachadas",
                     marker_color="#E06666",
-                    text=[f"{v:,}" for v in grouped["lineas_despachadas"]],
+                    text=[f"{int(v):,}" for v in grouped["unidades_despachadas"]],
                     textposition="auto",
                     textfont=dict(color="#262626"),
-                    hovertemplate="Líneas despachadas: %{y:,}<extra></extra>"
+                    hovertemplate="Unidades despachadas: %{y:,}<extra></extra>"
                 ))
 
                 fig1.add_trace(go.Scatter(
                     x=eje_x_labels,
                     y=grouped["pct_rectificadas"],
-                    name="% líneas rectificadas",
+                    name="% unidades rectificadas (M+A)",
                     mode="lines+markers+text",
-                    text=[f"{pct:.2f}% ({notas:,} líneas)" for pct, notas in zip(grouped["pct_rectificadas"], grouped["notas_art"])],
+                    text=[f"{pct:.2f}%" for pct in grouped["pct_rectificadas"]],
                     textposition="top center",
                     textfont=dict(size=10, color="#262626"),
                     line=dict(color="#1155CC", width=3),
                     marker=dict(color="#1155CC", size=7),
                     yaxis="y2",
-                    hovertemplate="% Rectificadas: %{y:.2f}%<extra></extra>"
+                    hovertemplate="% Rectificados: %{y:.2f}%<extra></extra>"
                 ))
 
                 fig1.update_layout(
@@ -412,17 +421,18 @@ try:
                 
                 if not df_rect.empty:
                     if nivel_seleccionado == "Fecha":
-                        pivot_rect = df_rect.groupby(["Fecha_DT", col_eje_x, "Estado Rectificación"]).size().unstack(fill_value=0)
+                        pivot_rect = df_rect.groupby(["Fecha_DT", col_eje_x, "Estado Rectificación"])["Total Unidades_Num"].sum().unstack(fill_value=0)
                         pivot_rect = pivot_rect.reset_index().sort_values(by="Fecha_DT").set_index(col_eje_x).drop(columns=["Fecha_DT"])
                     else:
-                        pivot_rect = df_rect.groupby([col_eje_x, "Estado Rectificación"]).size().unstack(fill_value=0)
+                        pivot_rect = df_rect.groupby([col_eje_x, "Estado Rectificación"])["Total Unidades_Num"].sum().unstack(fill_value=0)
                         pivot_rect = pivot_rect.sort_index()
 
                     pivot_pct = pivot_rect.div(pivot_rect.sum(axis=1), axis=0) * 100
+                    pivot_pct = pivot_pct.fillna(0)
                     eje_x_rect_labels = pivot_pct.index.astype(str)
 
                     with c2:
-                        st.markdown(f"**Resolución líneas rectificadas**")
+                        st.markdown(f"**Resolución unidades rectificadas**")
                         fig2 = go.Figure()
 
                         colors = {
@@ -471,26 +481,25 @@ try:
                         st.plotly_chart(fig2, width="stretch", key="grafico_resolucion_rectificadas")
                 else:
                     with c2:
-                        st.markdown(f"**Resolución líneas rectificadas**")
+                        st.markdown(f"**Resolución unidades rectificadas**")
                         st.info("No hay rectificaciones registradas para el nivel de filtro seleccionado.")
 
-    # HOJA 3: DETALLE POR TIENDA CON LEYENDA Y SOLO CÍRCULO EN LA TABLA
+    # HOJA 3: DETALLE POR TIENDA (ENCABEZADOS RELLENADOS Y ANCHO HOMOGÉNEO)
     with tab_tiendas:
-        st.subheader("🏪 Detalle de Rectificaciones por Tienda (Ranking de Insatisfacción)")
+        st.subheader("🏪 Detalle de Rectificaciones por Tienda (Unidades)")
         
-        # Leyenda explicativa arriba de la tabla
-        st.info("💡 **Leyenda del Semáforo de Insatisfacción:** &nbsp;&nbsp; 🔴 **Alta** (>15%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟡 **Media** (5% - 15%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 **Baja** (<5%)")
+        st.info(f"💡 **Leyenda del Semáforo de Insatisfacción:** Se calcula con el **% Unidades Rectificadas Efectivas** (Confirmadas M + Automáticas A / Despachadas). Umbrales: 🔴 **Alta** (>{p66:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟡 **Media** ({p33:.2f}% - {p66:.2f}%) &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 **Baja** (<{p33:.2f}%)")
         
         if not tab_t.empty:
-            # Ordenar de mayor a menor por %
             tab_t_sorted = tab_t.sort_values(by="pct_rectificadas_num", ascending=False).reset_index(drop=True)
 
-            # Renombrar columnas
             tab_t_sorted = tab_t_sorted.rename(columns={
                 "Tienda que Grabo_Limpia": "Tienda",
                 "Semaforo_Icono": "Nivel Insatisfacción",
-                "lineas_rectificadas": "Líneas rectificadas",
-                "pct_rectificadas_num": "% líneas rectificadas",
+                "unidades_despachadas": "Unidades Despachadas",
+                "unidades_reclamadas_totales": "Unidades Reclamadas Totales",
+                "unidades_efectivas": "Unidades Rectificadas Efectivas (M+A)",
+                "pct_rectificadas_num": "% Rectificado Efectivo",
                 "Confirmada": "Confirmadas (M)",
                 "Pendientes": "Pendientes (P)",
                 "Anuladas": "Anuladas (R)",
@@ -498,31 +507,35 @@ try:
             })
 
             cols_select = [
-                "Tienda", "Nivel Insatisfacción", "Líneas rectificadas", 
-                "Confirmadas (M)", "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", "% líneas rectificadas"
+                "Tienda", "Nivel Insatisfacción", "Unidades Despachadas", 
+                "Unidades Reclamadas Totales", "Unidades Rectificadas Efectivas (M+A)", 
+                "Confirmadas (M)", "Pendientes (P)", "Anuladas (R)", "Automáticas (A)", 
+                "% Rectificado Efectivo"
             ]
 
             df_tiendas_disp = tab_t_sorted[cols_select].copy()
 
-            # Totales calculados
-            tot_confirmadas = (df["Estado Rectificación"] == "Confirmada").sum()
-            tot_pendientes = (df["Estado Rectificación"] == "Pendientes").sum()
-            tot_anuladas = (df["Estado Rectificación"] == "Anuladas").sum()
-            tot_automaticas = (df["Estado Rectificación"] == "Automática").sum()
-            tot_rectificadas = tot_confirmadas + tot_pendientes + tot_anuladas + tot_automaticas
-            tot_despachadas = len(df)
-            tot_pct = (tot_rectificadas / tot_despachadas * 100) if tot_despachadas > 0 else 0
+            tot_unidades_despachadas = int(df["Total Unidades_Num"].sum(skipna=True))
+            tot_unidades_confirmadas = int(df[df["Estado Rectificación"] == "Confirmada"]["Total Unidades_Num"].sum(skipna=True))
+            tot_unidades_pendientes = int(df[df["Estado Rectificación"] == "Pendientes"]["Total Unidades_Num"].sum(skipna=True))
+            tot_unidades_anuladas = int(df[df["Estado Rectificación"] == "Anuladas"]["Total Unidades_Num"].sum(skipna=True))
+            tot_unidades_automaticas = int(df[df["Estado Rectificación"] == "Automática"]["Total Unidades_Num"].sum(skipna=True))
+            tot_unidades_reclamadas_totales = tot_unidades_confirmadas + tot_unidades_pendientes + tot_unidades_anuladas + tot_unidades_automaticas
+            tot_unidades_efectivas = tot_unidades_confirmadas + tot_unidades_automaticas
+            
+            tot_pct_rectificados = (tot_unidades_efectivas / tot_unidades_despachadas * 100) if tot_unidades_despachadas > 0 else 0
 
-            # Fila de Totales
             fila_total = pd.DataFrame([{
                 "Tienda": "Total",
                 "Nivel Insatisfacción": "—",
-                "Líneas rectificadas": int(tot_rectificadas),
-                "Confirmadas (M)": int(tot_confirmadas),
-                "Pendientes (P)": int(tot_pendientes),
-                "Anuladas (R)": int(tot_anuladas),
-                "Automáticas (A)": int(tot_automaticas),
-                "% líneas rectificadas": tot_pct
+                "Unidades Despachadas": int(tot_unidades_despachadas),
+                "Unidades Reclamadas Totales": int(tot_unidades_reclamadas_totales),
+                "Unidades Rectificadas Efectivas (M+A)": int(tot_unidades_efectivas),
+                "Confirmadas (M)": int(tot_unidades_confirmadas),
+                "Pendientes (P)": int(tot_unidades_pendientes),
+                "Anuladas (R)": int(tot_unidades_anuladas),
+                "Automáticas (A)": int(tot_unidades_automaticas),
+                "% Rectificado Efectivo": tot_pct_rectificados
             }])
 
             df_final_tiendas = pd.concat([df_tiendas_disp, fila_total], ignore_index=True)
@@ -533,17 +546,137 @@ try:
                 hide_index=True, 
                 key="tabla_resumen_tiendas",
                 column_config={
-                    "% líneas rectificadas": st.column_config.NumberColumn(
-                        "% líneas rectificadas",
-                        format="%.2f %%"
-                    ),
-                    "Líneas rectificadas": st.column_config.NumberColumn("Líneas rectificadas", format="%d"),
-                    "Confirmadas (M)": st.column_config.NumberColumn("Confirmadas (M)", format="%d"),
-                    "Pendientes (P)": st.column_config.NumberColumn("Pendientes (P)", format="%d"),
-                    "Anuladas (R)": st.column_config.NumberColumn("Anuladas (R)", format="%d"),
-                    "Automáticas (A)": st.column_config.NumberColumn("Automáticas (A)", format="%d")
+                    "Tienda": st.column_config.Column("Tienda", width=70),
+                    "Nivel Insatisfacción": st.column_config.Column("Nivel\nInsatisfacción", width=100),
+                    "Unidades Despachadas": st.column_config.NumberColumn("Unidades\nDespachadas", format="%d", width=110),
+                    "Unidades Reclamadas Totales": st.column_config.NumberColumn("Unidades Reclamadas\nTotales", format="%d", width=130),
+                    "Unidades Rectificadas Efectivas (M+A)": st.column_config.NumberColumn("Unidades Rectificadas\nEfectivas (M+A)", format="%d", width=140),
+                    "Confirmadas (M)": st.column_config.NumberColumn("Confirmadas\n(M)", format="%d", width=100),
+                    "Pendientes (P)": st.column_config.NumberColumn("Pendientes\n(P)", format="%d", width=100),
+                    "Anuladas (R)": st.column_config.NumberColumn("Anuladas\n(R)", format="%d", width=100),
+                    "Automáticas (A)": st.column_config.NumberColumn("Automáticas\n(A)", format="%d", width=100),
+                    "% Rectificado Efectivo": st.column_config.NumberColumn("% Rectificado\nEfectivo", format="%.2f %%", width=110)
                 }
             )
+
+    # HOJA 4: ANÁLISIS DE NOTAS / OPERACIONES (ORDEN DE MAYOR A MENOR DE ARRIBA A ABAJO)
+    with tab_notas:
+        st.subheader("📋 Análisis de Carga Administrativa por Cantidad de Notas / Operaciones")
+        st.caption("Esta sección analiza la frecuencia de reclamos creados por las tiendas (Cuenta de Operaciones/Notas), permitiendo medir el impacto operativo independientemente del volumen de unidades.")
+
+        df_rect_notas = df[df["Estado Rectificación"] != "N - Nulo"]
+        
+        cant_confirmadas_n = (df["Estado Rectificación"] == "Confirmada").sum()
+        cant_anuladas_n = (df["Estado Rectificación"] == "Anuladas").sum()
+        cant_pendientes_n = (df["Estado Rectificación"] == "Pendientes").sum()
+        cant_automaticas_n = (df["Estado Rectificación"] == "Automática").sum()
+        cant_totales_n = cant_confirmadas_n + cant_anuladas_n + cant_pendientes_n + cant_automaticas_n
+
+        n1, n2, n3, n4, n5 = st.columns(5)
+        n1.metric("Total Notas Creadas", f"{cant_totales_n:,}")
+        n2.metric("Confirmadas (M)", f"{cant_confirmadas_n:,}")
+        n3.metric("Anuladas (R)", f"{cant_anuladas_n:,}")
+        n4.metric("Pendientes (P)", f"{cant_pendientes_n:,}")
+        n5.metric("Automáticas (A)", f"{cant_automaticas_n:,}")
+
+        st.markdown("---")
+
+        st.markdown("**Top 10 Tiendas con Mayor Cantidad de Notas (Desglose por Estado de Rectificación)**")
+        
+        # Top 10 ordenado de mayor a menor
+        top_tiendas_counts = df_rect_notas["Tienda que Grabo_Limpia"].value_counts().head(10)
+        top_tiendas_list = top_tiendas_counts.index.tolist()
+        
+        df_top_stacked = df_rect_notas[df_rect_notas["Tienda que Grabo_Limpia"].isin(top_tiendas_list)]
+
+        grouped_stacked = df_top_stacked.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"]).size().reset_index(name="Notas")
+        grouped_stacked["Tienda_Label"] = "Tienda " + grouped_stacked["Tienda que Grabo_Limpia"].astype(str)
+        
+        orden_tiendas = ["Tienda " + str(x) for x in top_tiendas_list]
+
+        fig_top_stacked = px.bar(
+            grouped_stacked,
+            y="Tienda_Label",
+            x="Notas",
+            color="Estado Rectificación",
+            orientation="h",
+            text="Notas",
+            color_discrete_map={
+                "Confirmada": "#4A90E2",
+                "Anuladas": "#E69138",
+                "Pendientes": "#F1C232",
+                "Automática": "#38761D"
+            },
+            category_orders={"Tienda_Label": orden_tiendas}
+        )
+
+        fig_top_stacked.update_traces(textposition="inside", textfont=dict(color="#FFFFFF", size=11))
+        fig_top_stacked.update_layout(
+            barmode="stack",
+            height=450,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Cantidad de Notas / Operaciones", showgrid=True),
+            yaxis=dict(title="", autorange="reversed"),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.05,
+                xanchor="right",
+                x=1,
+                title=dict(text="Estado Rectificación:")
+            ),
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig_top_stacked, width="stretch", key="grafico_top_tiendas_stacked_full")
+
+        st.markdown("---")
+        st.markdown("##### 🏪 Tabla Detalle de Notas Creadas por Tienda")
+
+        pivot_notas = df_rect_notas.groupby(["Tienda que Grabo_Limpia", "Estado Rectificación"]).size().unstack(fill_value=0)
+        for est_c in ["Confirmada", "Pendientes", "Anuladas", "Automática"]:
+            if est_c not in pivot_notas.columns:
+                pivot_notas[est_c] = 0
+
+        pivot_notas["Total Notas"] = pivot_notas["Confirmada"] + pivot_notas["Pendientes"] + pivot_notas["Anuladas"] + pivot_notas["Automática"]
+        pivot_notas = pivot_notas.sort_values(by="Total Notas", ascending=False).reset_index()
+
+        pivot_notas = pivot_notas.rename(columns={
+            "Tienda que Grabo_Limpia": "Tienda",
+            "Confirmada": "Notas Confirmadas (M)",
+            "Pendientes": "Notas Pendientes (P)",
+            "Anuladas": "Notas Anuladas (R)",
+            "Automática": "Notas Automáticas (A)"
+        })
+
+        cols_notas = ["Tienda", "Total Notas", "Notas Confirmadas (M)", "Notas Pendientes (P)", "Notas Anuladas (R)", "Notas Automáticas (A)"]
+        df_disp_notas = pivot_notas[cols_notas].copy()
+
+        fila_tot_notas = pd.DataFrame([{
+            "Tienda": "Total",
+            "Total Notas": int(cant_totales_n),
+            "Notas Confirmadas (M)": int(cant_confirmadas_n),
+            "Notas Pendientes (P)": int(cant_pendientes_n),
+            "Notas Anuladas (R)": int(cant_anuladas_n),
+            "Notas Automáticas (A)": int(cant_automaticas_n)
+        }])
+
+        df_final_notas = pd.concat([df_disp_notas, fila_tot_notas], ignore_index=True)
+
+        st.dataframe(
+            df_final_notas,
+            width="stretch",
+            hide_index=True,
+            key="tabla_detalle_notas_tienda",
+            column_config={
+                "Tienda": st.column_config.Column("Tienda", width=80),
+                "Total Notas": st.column_config.NumberColumn("Total\nNotas", format="%d", width=100),
+                "Notas Confirmadas (M)": st.column_config.NumberColumn("Notas Confirmadas\n(M)", format="%d", width=120),
+                "Notas Pendientes (P)": st.column_config.NumberColumn("Notas Pendientes\n(P)", format="%d", width=120),
+                "Notas Anuladas (R)": st.column_config.NumberColumn("Notas Anuladas\n(R)", format="%d", width=120),
+                "Notas Automáticas (A)": st.column_config.NumberColumn("Notas Automáticas\n(A)", format="%d", width=120)
+            }
+        )
 
 except FileNotFoundError as e:
     st.error(f"⚠️ {e}")
